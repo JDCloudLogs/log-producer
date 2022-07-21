@@ -41,7 +41,7 @@ message:  <sequence>This is a test message,测试日志_____abcdefghijklmnopqrst
 将日志缓存总大小 totalSizeInBytes 设置为默认值 104,857,600（即 100 MB），每批次发送的日志字节数 batchSizeInBytes 设置为默认值 2,097,152（即 2 MB），通过调整发送线程数 sendThreads 观察程序性能。
 
 | IO 线程数量 | 原始数据吞吐量 | 压缩后数据吞吐量 | CPU 使用率 |
-| -------- | -------- | -------- | -------- | -------- |
+| -------- | -------- | -------- | -------- |
 | 1 | 18.497 MB/s | 0.253 MB/s | 45% |
 | 2 | 36.583 MB/s | 0.501 MB/s | 115% |
 | 4 | 68.309 MB/s | 0.936 MB/s | 160% |
@@ -52,7 +52,7 @@ message:  <sequence>This is a test message,测试日志_____abcdefghijklmnopqrst
 将发送线程数 sendThreads 设置为4，每批次发送的日志字节数 batchSizeInBytes 设置为默认值 2,097,152（即 2 MB），通过调整日志缓存总大小 totalSizeInBytes 观察程序性能。
 
 | totalSizeInBytes | 原始数据吞吐量 | 压缩后数据吞吐量 | CPU 使用率 |
-| -------- | -------- | -------- | -------- | -------- |
+| -------- | -------- | -------- | -------- |
 | 26,214,400 | 43.834 MB/s | 0.600 MB/s | 150% |
 | 52,428,800 | 65.400 MB/s | 0.896 MB/s | 160% |
 | 104,857,600 | 68.309 MB/s | 0.936 MB/s | 160% |
@@ -62,7 +62,7 @@ message:  <sequence>This is a test message,测试日志_____abcdefghijklmnopqrst
 将发送线程数 sendThreads 设置为4，日志缓存总大小 totalSizeInBytes 设置为默认值 104,857,600（即 100 MB），通过调整每批次发送的日志字节数 batchSizeInBytes 观察程序性能。
 
 | batchSizeInBytes | 原始数据吞吐量 | 压缩后数据吞吐量 | CPU 使用率 | 请求日志服务压缩后大小 | 请求日志服务响应时间 |
-| -------- | -------- | -------- | -------- | -------- |
+| -------- | -------- | -------- | -------- | -------- | -------- |
 | 524,288 | 61.991 MB/s | 0.849 MB/s | 100% | 8k | 25ms |
 | 1,048,576 | 57.902 MB/s | 0.793 MB/s | 110% | 16k | 60ms |
 | 2,097,152 | 68.309 MB/s | 0.936 MB/s | 160% | 32k | 110ms |
