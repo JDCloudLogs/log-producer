@@ -1,9 +1,11 @@
 package com.jdcloud.logs.producer;
 
+import com.google.common.util.concurrent.ListenableFuture;
 import com.jdcloud.logs.api.common.LogItem;
 import com.jdcloud.logs.producer.config.ProducerConfig;
 import com.jdcloud.logs.producer.config.RegionConfig;
 import com.jdcloud.logs.producer.errors.ProducerException;
+import com.jdcloud.logs.producer.res.Response;
 
 import java.util.List;
 
@@ -14,16 +16,16 @@ import java.util.List;
  */
 public interface Producer {
 
-    void send(String regionId, String logTopic, LogItem logItem)
+    ListenableFuture<Response> send(String regionId, String logTopic, LogItem logItem)
             throws ProducerException, InterruptedException;
 
-    void send(String regionId, String logTopic, LogItem logItem, String source, String fileName)
+    ListenableFuture<Response> send(String regionId, String logTopic, LogItem logItem, String source, String fileName)
             throws ProducerException, InterruptedException;
 
-    void send(String regionId, String logTopic, List<LogItem> logItems)
+    ListenableFuture<Response> send(String regionId, String logTopic, List<LogItem> logItems)
             throws ProducerException, InterruptedException;
 
-    void send(String regionId, String logTopic, List<LogItem> logItems, String source, String fileName)
+    ListenableFuture<Response> send(String regionId, String logTopic, List<LogItem> logItems, String source, String fileName)
             throws ProducerException, InterruptedException;
 
     void close() throws InterruptedException, ProducerException;

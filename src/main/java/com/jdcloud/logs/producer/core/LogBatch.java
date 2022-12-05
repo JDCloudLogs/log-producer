@@ -1,9 +1,12 @@
 package com.jdcloud.logs.producer.core;
 
+import com.google.common.util.concurrent.SettableFuture;
 import com.jdcloud.logs.api.common.LogItem;
-import com.jdcloud.logs.producer.util.LogSizeCalculator;
+import com.jdcloud.logs.producer.res.Attempt;
+import com.jdcloud.logs.producer.res.Response;
 
 import javax.annotation.Nonnull;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.TimeUnit;
@@ -16,22 +19,22 @@ import java.util.concurrent.TimeUnit;
  */
 public class LogBatch implements Delayed {
 
-    private final List<LogItem> logItems;
-    private final LogProcessor.GroupKey groupKey;
+    private List<LogItem> logItems;
+    private final GroupKey groupKey;
     private long nextRetryMillis;
-    private int retries = 0;
-    private final int batchSizeInBytes;
-    private final int batchCount;
+    private int batchCount;
+    private int batchSizeInBytes;
+    private final List<SettableFuture<Response>> futures;
+    private final List<Attempt> attempts;
+    private int attemptCount;
 
-    public LogBatch(List<LogItem> logItems, LogProcessor.GroupKey groupKey, int batchSizeInBytes) {
-        this.logItems = logItems;
+    public LogBatch(GroupKey groupKey) {
         this.groupKey = groupKey;
-        this.batchSizeInBytes = batchSizeInBytes;
-        this.batchCount = logItems.size();
-    }
-
-    public void increaseRetries() {
-        this.retries++;
+        this.batchCount = 0;
+        this.batchSizeInBytes = 0;
+        this.attemptCount = 0;
+        this.futures = new ArrayList<SettableFuture<Response>>();
+        this.attempts = new ArrayList<Attempt>();
     }
 
     @Override
@@ -44,16 +47,41 @@ public class LogBatch implements Delayed {
         return (int) (nextRetryMillis - ((LogBatch) o).getNextRetryMillis());
     }
 
-    public int getRetries() {
-        return this.retries;
+    public void addLogItems(List<LogItem> logItems, int logCount, int sizeInBytes) {
+        if (this.logItems == null) {
+            this.logItems = new ArrayList<LogItem>();
+        }
+        this.logItems.addAll(logItems);
+        this.batchCount += logCount;
+        this.batchSizeInBytes += sizeInBytes;
     }
 
     public List<LogItem> getLogItems() {
         return logItems;
     }
 
-    public LogProcessor.GroupKey getGroupKey() {
+    public GroupKey getGroupKey() {
         return groupKey;
+    }
+
+    public long getNextRetryMillis() {
+        return nextRetryMillis;
+    }
+
+    public void setNextRetryMillis(long nextRetryMillis) {
+        this.nextRetryMillis = nextRetryMillis;
+    }
+
+    public int getRetries() {
+        return attemptCount - 1;
+    }
+
+    public int getBatchSizeInBytes() {
+        return batchSizeInBytes;
+    }
+
+    public int getBatchCount() {
+        return batchCount;
     }
 
     public String getRegionId() {
@@ -72,20 +100,25 @@ public class LogBatch implements Delayed {
         return getGroupKey().getFileName();
     }
 
-    public long getNextRetryMillis() {
-        return nextRetryMillis;
+    public void addFuture(SettableFuture<Response> future) {
+        this.futures.add(future);
     }
 
-    public void setNextRetryMillis(long nextRetryMillis) {
-        this.nextRetryMillis = nextRetryMillis;
+    public List<SettableFuture<Response>> getFutures() {
+        return futures;
     }
 
-    public int getBatchSizeInBytes() {
-        return batchSizeInBytes;
+    public List<Attempt> getAttempts() {
+        return attempts;
     }
 
-    public int getBatchCount() {
-        return batchCount;
+    public void addAttempt(Attempt attempt) {
+        this.attempts.add(attempt);
+        this.attemptCount++;
+    }
+
+    public int getAttemptCount() {
+        return attemptCount;
     }
 
     @Override
@@ -93,7 +126,7 @@ public class LogBatch implements Delayed {
         return "LogBatch{" +
                 "groupKey=" + groupKey +
                 ", nextRetryMillis=" + nextRetryMillis +
-                ", retries=" + retries +
+                ", attemptCount=" + attemptCount +
                 ", batchSizeInBytes=" + batchSizeInBytes +
                 ", batchCount=" + batchCount +
                 '}';

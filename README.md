@@ -10,6 +10,6 @@ JDCloud log producer Java SDK 是一个用于大数据量、高并发场景下�
 <dependency>
     <groupId>com.jdcloud.logs</groupId>
     <artifactId>log-producer</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
 </dependency>
 ```

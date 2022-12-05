@@ -6,7 +6,7 @@
 
     <groupId>com.jdcloud.logs</groupId>
     <artifactId>log-producer</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
 
     <name>JDCloud LOG Producer</name>
     <url>http://jdcloud.com</url>
@@ -46,7 +46,7 @@
 
     <properties>
         <disruptor.version>3.4.2</disruptor.version>
-        <log-api.version>0.1.0</log-api.version>
+        <log-api.version>0.2.0</log-api.version>
         <guava.version>27.0-jre</guava.version>
         <slf4j.version>1.7.25</slf4j.version>
         <logback.version>1.2.3</logback.version>

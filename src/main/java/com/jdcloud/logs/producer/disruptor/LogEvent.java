@@ -1,8 +1,11 @@
 package com.jdcloud.logs.producer.disruptor;
 
-import com.jdcloud.logs.api.common.LogContent;
+import com.google.common.util.concurrent.SettableFuture;
 import com.jdcloud.logs.api.common.LogItem;
+import com.jdcloud.logs.producer.res.Response;
 import com.lmax.disruptor.EventFactory;
+
+import java.util.List;
 
 /**
  * 日志对象
@@ -10,12 +13,14 @@ import com.lmax.disruptor.EventFactory;
  * @author liubai
  * @date 2022/7/10
  */
-public class LogEvent implements LogSizeCalculable {
+public class LogEvent implements Event {
 
     public static final Factory FACTORY = new Factory();
 
-    private LogItem logItem;
+    private List<LogItem> logItems;
     private int sizeInBytes;
+    private int logCount;
+    private SettableFuture<Response> future;
 
     private static class Factory implements EventFactory<LogEvent> {
         @Override
@@ -24,31 +29,26 @@ public class LogEvent implements LogSizeCalculable {
         }
     }
 
-    public LogItem getLogItem() {
-        return logItem;
+    @Override
+    public List<LogItem> getLogItems() {
+        return logItems;
     }
 
-    public void setLogItem(LogItem logItem) {
-        this.logItem = logItem;
+    public void setLogItems(List<LogItem> logItems) {
+        this.logItems = logItems;
+    }
+
+    @Override
+    public int getLogCount() {
+        return logCount;
+    }
+
+    public void setLogCount(int logCount) {
+        this.logCount = logCount;
     }
 
     @Override
     public int getSizeInBytes() {
-        if (logItem == null) {
-            return 0;
-        }
-        if (this.sizeInBytes == 0) {
-            int sizeInBytes = 8;
-            for (LogContent content : logItem.getContents()) {
-                if (content.getKey() != null) {
-                    sizeInBytes += content.getKey().length();
-                }
-                if (content.getValue() != null) {
-                    sizeInBytes += content.getValue().length();
-                }
-            }
-            this.sizeInBytes = sizeInBytes;
-        }
         return this.sizeInBytes;
     }
 
@@ -56,4 +56,12 @@ public class LogEvent implements LogSizeCalculable {
         this.sizeInBytes = sizeInBytes;
     }
 
+    @Override
+    public SettableFuture<Response> getFuture() {
+        return future;
+    }
+
+    public void setFuture(SettableFuture<Response> future) {
+        this.future = future;
+    }
 }

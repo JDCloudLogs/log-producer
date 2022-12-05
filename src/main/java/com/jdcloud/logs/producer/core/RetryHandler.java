@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -22,6 +23,8 @@ public class RetryHandler extends AbstractCloser {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(RetryHandler.class);
 
+    private static final String THREAD_PREFIX = "-retry";
+
     private final ProducerConfig producerConfig;
 
     private final Map<String, LogClient> logClientPool;
@@ -34,26 +37,33 @@ public class RetryHandler extends AbstractCloser {
 
     private volatile boolean closed;
 
-    private final LogThread logThread;
+    private final LogThread retryThread;
+
+    private final BlockingQueue<LogBatch> successQueue;
+
+    private final BlockingQueue<LogBatch> failureQueue;
 
     public RetryHandler(String producerName, ProducerConfig producerConfig, Map<String, LogClient> logClientPool,
-                        RetryQueue retryQueue, BatchSender batchSender, ResourceHolder resourceHolder) {
+                        RetryQueue retryQueue, BatchSender batchSender, ResourceHolder resourceHolder,
+                        BlockingQueue<LogBatch> successQueue, BlockingQueue<LogBatch> failureQueue) {
         this.producerConfig = producerConfig;
         this.logClientPool = logClientPool;
         this.retryQueue = retryQueue;
         this.batchSender = batchSender;
         this.resourceHolder = resourceHolder;
-        this.logThread = new LogThread(producerName, true) {
+        this.retryThread = new LogThread(producerName + THREAD_PREFIX, true) {
             @Override
             public void run() {
                 retry();
             }
         };
         this.closed = false;
+        this.successQueue = successQueue;
+        this.failureQueue = failureQueue;
     }
 
     public void start() {
-        logThread.start();
+        retryThread.start();
     }
 
     private void retry() {
@@ -98,15 +108,17 @@ public class RetryHandler extends AbstractCloser {
     }
 
     private BatchSender.SendBatchTask createSendBatchTask(LogBatch batch) {
-        return new BatchSender.SendBatchTask(batch, producerConfig, logClientPool, retryQueue, resourceHolder);
+        return new BatchSender.SendBatchTask(batch, producerConfig, logClientPool, retryQueue, resourceHolder,
+                successQueue, failureQueue);
     }
 
     @Override
     public void doClose(long timeoutMillis) throws InterruptedException, ProducerException {
         this.closed = true;
-        logThread.interrupt();
-        logThread.join(timeoutMillis);
-        if (logThread.isAlive()) {
+        // 打断队列自旋，防止队列为空时无法跳出while循环
+        retryThread.interrupt();
+        retryThread.join(timeoutMillis);
+        if (retryThread.isAlive()) {
             LOGGER.warn("The retry handler thread is still alive");
             throw new ProducerException("the retry handler thread is still alive");
         }
