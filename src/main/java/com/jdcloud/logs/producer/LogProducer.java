@@ -1,18 +1,19 @@
 package com.jdcloud.logs.producer;
 
+import com.google.common.util.concurrent.ListenableFuture;
 import com.jdcloud.logs.api.LogClient;
 import com.jdcloud.logs.api.common.LogItem;
 import com.jdcloud.logs.api.config.ClientConfig;
-import com.jdcloud.logs.api.http.HttpClient;
 import com.jdcloud.logs.api.util.Validate;
 import com.jdcloud.logs.producer.config.ProducerConfig;
 import com.jdcloud.logs.producer.config.RegionConfig;
 import com.jdcloud.logs.producer.core.*;
 import com.jdcloud.logs.producer.errors.MaxBatchSizeExceedException;
 import com.jdcloud.logs.producer.errors.ProducerException;
+import com.jdcloud.logs.producer.res.Response;
+import com.jdcloud.logs.producer.res.ResponseHandler;
 import com.jdcloud.logs.producer.util.LogThreadFactory;
 import com.jdcloud.logs.producer.util.LogUtils;
-import com.jdcloud.logs.producer.util.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,7 +25,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * log producer
- * 由于使用了disruptor，暂无法控制批次按照大小发送以及行为追溯
  *
  * @author liubai
  * @date 2022/6/29
@@ -38,6 +38,10 @@ public class LogProducer implements Producer {
     private static final String LOG_PRODUCER_PREFIX = "jdcloud-log-producer-";
 
     private static final String RETRY_HANDLER_EXECUTOR_SUFFIX = "-retry-handler";
+
+    private static final String SUCCESS_RESPONSE_HANDLER_FLAG = "success";
+
+    private static final String FAILURE_RESPONSE_HANDLER_FLAG = "failure";
 
     private static final String HTTP_EXECUTOR_SUFFIX = "-http-";
 
@@ -57,6 +61,10 @@ public class LogProducer implements Producer {
 
     private final RetryHandler retryHandler;
 
+    private final ResponseHandler successHandler;
+
+    private final ResponseHandler failureHandler;
+
     public LogProducer(ProducerConfig producerConfig) {
         int instanceId = INSTANCE_ID_GENERATOR.getAndIncrement();
         String producerName = LOG_PRODUCER_PREFIX + instanceId;
@@ -68,37 +76,44 @@ public class LogProducer implements Producer {
                 producerConfig.getSendThreads(), 0, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<Runnable>(), new LogThreadFactory(producerName + HTTP_EXECUTOR_SUFFIX));
         this.retryQueue = new RetryQueue();
+        BlockingQueue<LogBatch> successQueue = new LinkedBlockingQueue<LogBatch>();
+        BlockingQueue<LogBatch> failureQueue = new LinkedBlockingQueue<LogBatch>();
         this.batchSender = new BatchSender(this.logClientPool, producerConfig, producerName, this.retryQueue,
-                resourceHolder);
+                resourceHolder, successQueue, failureQueue);
         this.logProcessor = new LogProcessor(this.batchSender, producerConfig, resourceHolder, producerName);
         this.retryHandler = new RetryHandler(producerName + RETRY_HANDLER_EXECUTOR_SUFFIX, producerConfig,
-                this.logClientPool, this.retryQueue, this.batchSender, resourceHolder);
+                this.logClientPool, this.retryQueue, this.batchSender, resourceHolder, successQueue,
+                failureQueue);
+        this.successHandler = new ResponseHandler(successQueue, producerName, SUCCESS_RESPONSE_HANDLER_FLAG, resourceHolder);
+        this.failureHandler = new ResponseHandler(failureQueue, producerName, FAILURE_RESPONSE_HANDLER_FLAG, resourceHolder);
         this.retryHandler.start();
+        this.successHandler.start();
+        this.failureHandler.start();
     }
 
     @Override
-    public void send(String regionId, String logTopic, LogItem logItem)
+    public ListenableFuture<Response> send(String regionId, String logTopic, LogItem logItem)
             throws ProducerException, InterruptedException {
-        send(regionId, logTopic, logItem, null, null);
+        return send(regionId, logTopic, logItem, null, null);
     }
 
     @Override
-    public void send(String regionId, String logTopic, LogItem logItem, String source, String fileName)
+    public ListenableFuture<Response> send(String regionId, String logTopic, LogItem logItem, String source, String fileName)
             throws ProducerException, InterruptedException {
         Validate.notNull(logItem, "logItem");
         List<LogItem> logItems = new ArrayList<LogItem>();
         logItems.add(logItem);
-        send(regionId, logTopic, logItems, source, fileName);
+        return send(regionId, logTopic, logItems, source, fileName);
     }
 
     @Override
-    public void send(String regionId, String logTopic, List<LogItem> logItems)
+    public ListenableFuture<Response> send(String regionId, String logTopic, List<LogItem> logItems)
             throws ProducerException, InterruptedException {
-        send(regionId, logTopic, logItems, null, null);
+        return send(regionId, logTopic, logItems, null, null);
     }
 
     @Override
-    public void send(String regionId, String logTopic, List<LogItem> logItems, String source, String fileName)
+    public ListenableFuture<Response> send(String regionId, String logTopic, List<LogItem> logItems, String source, String fileName)
             throws ProducerException, InterruptedException {
         Validate.notBlank(logTopic, "logTopic");
         Validate.notNull(logItems, "logItems");
@@ -110,7 +125,7 @@ public class LogProducer implements Producer {
             throw new MaxBatchSizeExceedException("the log list size is " + count
                     + " which exceeds the MAX_BATCH_COUNT " + ProducerConfig.MAX_BATCH_SIZE);
         }
-        logProcessor.process(regionId, logTopic, logItems, source, fileName);
+        return logProcessor.process(regionId, logTopic, logItems, source, fileName);
     }
 
     @Override
@@ -140,7 +155,9 @@ public class LogProducer implements Producer {
         try {
             retryQueueCost = retryQueue.close(timeoutMillis);
         } catch (ProducerException e) {
-            firstException = e;
+            if (firstException == null) {
+                firstException = e;
+            }
         }
         timeoutMillis = Math.max(0, timeoutMillis - retryQueueCost);
         LOGGER.debug("After close retryQueue, cost={}ms, remaining timeoutMillis={}ms", retryQueueCost,
@@ -150,7 +167,9 @@ public class LogProducer implements Producer {
         try {
             retryHandlerCost = retryHandler.close(timeoutMillis);
         } catch (ProducerException e) {
-            firstException = e;
+            if (firstException == null) {
+                firstException = e;
+            }
         }
         timeoutMillis = Math.max(0, timeoutMillis - retryHandlerCost);
         LOGGER.debug("After close retryHandler, cost={}ms, remaining timeoutMillis={}ms", retryHandlerCost,
@@ -178,6 +197,30 @@ public class LogProducer implements Producer {
         }
         timeoutMillis = Math.max(0, timeoutMillis - httpExecutorCost);
         LOGGER.debug("After close httpExecutor, cost={}ms, remaining timeoutMillis={}ms", httpExecutorCost,
+                timeoutMillis);
+
+        long successHandlerCost = 0;
+        try {
+            successHandlerCost = successHandler.close(timeoutMillis);
+        } catch (ProducerException e) {
+            if (firstException == null) {
+                firstException = e;
+            }
+        }
+        timeoutMillis = Math.max(0, timeoutMillis - successHandlerCost);
+        LOGGER.debug("After close successHandler, cost={}ms, remaining timeoutMillis={}ms", successHandlerCost,
+                timeoutMillis);
+
+        long failureHandlerCost = 0;
+        try {
+            failureHandlerCost = failureHandler.close(timeoutMillis);
+        } catch (ProducerException e) {
+            if (firstException == null) {
+                firstException = e;
+            }
+        }
+        timeoutMillis = Math.max(0, timeoutMillis - failureHandlerCost);
+        LOGGER.debug("After close failureHandler, cost={}ms, remaining timeoutMillis={}ms", failureHandlerCost,
                 timeoutMillis);
 
         if (firstException != null) {

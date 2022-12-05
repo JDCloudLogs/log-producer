@@ -12,7 +12,9 @@ public class LogEventTranslator implements EventTranslatorOneArg<LogEvent, LogEv
 
     @Override
     public void translateTo(LogEvent logEvent, long sequence, LogEvent logItem) {
-        logEvent.setLogItem(logItem.getLogItem());
+        logEvent.setLogItems(logItem.getLogItems());
         logEvent.setSizeInBytes(logItem.getSizeInBytes());
+        logEvent.setLogCount(logItem.getLogCount());
+        logEvent.setFuture(logItem.getFuture());
     }
 }

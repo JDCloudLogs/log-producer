@@ -1,16 +1,24 @@
 package com.jdcloud.logs.producer;
 
+import com.google.common.util.concurrent.FutureCallback;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
 import com.jdcloud.logs.api.common.LogContent;
 import com.jdcloud.logs.api.common.LogItem;
 import com.jdcloud.logs.producer.config.ProducerConfig;
 import com.jdcloud.logs.producer.config.RegionConfig;
 import com.jdcloud.logs.producer.errors.ProducerException;
+import com.jdcloud.logs.producer.errors.SendFailureException;
+import com.jdcloud.logs.producer.res.Response;
 import org.junit.Assert;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -22,6 +30,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * @date 2022/7/12
  */
 public class LogProducerTest {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(LogProducerTest.class);
 
     public final static String logTopic = System.getProperty("logTopic");
     public final static String accessKeyId = System.getProperty("accessKeyId");
@@ -226,6 +236,83 @@ public class LogProducerTest {
         assertProducerFinalState(producer);
     }
 
+    /**
+     * 测试异步回调
+     * 预期：发送批次 = 响应批次 = 10 * 100
+     */
+    @Test
+    public void sendWithFuture() throws ProducerException, InterruptedException {
+        ProducerConfig producerConfig = new ProducerConfig();
+        RegionConfig regionConfig = new RegionConfig(accessKeyId, secretAccessKey, regionId, endpoint);
+        final Producer producer = new LogProducer(producerConfig);
+        producer.putRegionConfig(regionConfig);
+
+        final int tasks = 10;
+        final int times = 100;
+        final AtomicInteger logId = new AtomicInteger(0);
+        ExecutorService sendPool = Executors.newFixedThreadPool(6);
+        final ExecutorService resultPool = Executors.newFixedThreadPool(6);
+        final CountDownLatch latch = new CountDownLatch(tasks * times);
+        final FutureCallback<Response> futureCallback = new LogFutureCallback(latch);
+        for (int i = 0; i < tasks; ++i) {
+            sendPool.submit(new Runnable() {
+                @Override
+                public void run() {
+                    for (int i = 0; i < times; ++i) {
+                        try {
+                            ListenableFuture<Response> future = producer.send(regionId, logTopic, buildLogItems(100, logId));
+                            Futures.addCallback(future, futureCallback, resultPool);
+                        } catch (ProducerException e) {
+                            LOGGER.error("Found ProducerException: {}", e.getMessage());
+                        } catch (InterruptedException e) {
+                            LOGGER.error("Found InterruptedException: {}", e.getMessage());
+                        }
+                    }
+                }
+            });
+        }
+        latch.await();
+        LOGGER.info("Produce end, producer logCount={}, availableMemoryInBytes={}", producer.getLogCount(),
+                producer.availableMemoryInBytes());
+        sendPool.shutdown();
+        resultPool.shutdown();
+        Thread.sleep(producerConfig.getBatchMillis() * 2L);
+        producer.close();
+        assertProducerFinalState(producer);
+    }
+
+    /**
+     * 测试同步回调
+     */
+    @Test
+    public void sendSyncWithFuture() throws ProducerException, InterruptedException {
+        ProducerConfig producerConfig = new ProducerConfig();
+        RegionConfig regionConfig = new RegionConfig(accessKeyId, secretAccessKey, regionId, endpoint);
+        final Producer producer = new LogProducer(producerConfig);
+        producer.putRegionConfig(regionConfig);
+
+        final int times = 10;
+        final AtomicInteger logId = new AtomicInteger(0);
+        for (int i = 0; i < times; ++i) {
+            try {
+                ListenableFuture<Response> future = producer.send(regionId, logTopic, buildLogItems(100, logId));
+                Response response = future.get();
+                LOGGER.info("Receive response, response={}", response);
+            } catch (ProducerException e) {
+                LOGGER.error("Found ProducerException: {}", e.getMessage(), e);
+            } catch (InterruptedException e) {
+                LOGGER.error("Found InterruptedException: {}", e.getMessage());
+            } catch (ExecutionException e) {
+                LOGGER.error("Found ExecutionException: {}", e.getMessage(), e);
+            }
+        }
+        LOGGER.info("Produce end, producer logCount={}, availableMemoryInBytes={}", producer.getLogCount(),
+                producer.availableMemoryInBytes());
+        Thread.sleep(producerConfig.getBatchMillis() * 2L);
+        producer.close();
+        assertProducerFinalState(producer);
+    }
+
     private Producer getProducer() {
         ProducerConfig producerConfig = new ProducerConfig();
         RegionConfig regionConfig = new RegionConfig(accessKeyId, secretAccessKey, regionId, endpoint);
@@ -236,24 +323,16 @@ public class LogProducerTest {
 
     public static LogItem buildLogItem(int seq) {
         LogItem logItem = new LogItem(System.currentTimeMillis());
-        logItem.addContent("level", "INFO");
-        logItem.addContent("thread", "pool-1-thread-2");
-        logItem.addContent("location", "com.jdcloud.logs.producer.core.BatchSender.sendBatch(BatchSender.java:117)");
-        logItem.addContent("message", seq + "This is a test message,"
-                + "测试日志_____abcdefghijklmnopqrstuvwxyz~!@#$%^&*()_0123456789,"
-                + "测试日志_____abcdefghijklmnopqrstuvwxyz~!@#$%^&*()_0123456789,"
-                + "测试日志_____abcdefghijklmnopqrstuvwxyz~!@#$%^&*()_0123456789,"
-                + "测试日志_____abcdefghijklmnopqrstuvwxyz~!@#$%^&*()_0123456789,"
-                + "测试日志_____abcdefghijklmnopqrstuvwxyz~!@#$%^&*()_0123456789,"
-                + "测试日志_____abcdefghijklmnopqrstuvwxyz~!@#$%^&*()_0123456789");
-//        logItem.addContent("message", "这是一条测试日志这是一条测试日志这是一条测试日志这是一条测试日志这是一条测试日志"
-//                +"这是一条测试日志这是一条测试日志这是一条测试日志这是一条测试日志这是一条测试日志"
-//                +"这是一条测试日志这是一条测试日志这是一条测试日志这是一条测试日志这是一条测试日志"
-//                +"这是一条测试日志这是一条测试日志这是一条测试日志这是一条测试日志这是一条测试日志"
-//                +"这是一条测试日志这是一条测试日志这是一条测试日志这是一条测试日志这是一条测试日志"
-//                +"这是一条测试日志这是一条测试日志这是一条测试日志这是一条测试日志这是一条测试日志"
-//                +"这是一条测试日志这是一条测试日志这是一条测试日志这是一条测试日志这是一条测试日志"
-//                + seq);
+        logItem.addContent("level", "INFO_" + seq);
+        logItem.addContent("thread", "pool-1-thread-2_" + seq);
+        logItem.addContent("location", "com.jdcloud.logs.producer.core.BatchSender.sendBatch(BatchSender.java:117)_" + seq);
+        logItem.addContent("message",
+                "0测试日志_____abcdefghijklmnopqrstuvwxyz~!@#$%^&*()_0123456789_" + seq
+                        + ",1测试日志_____abcdefghijklmnopqrstuvwxyz~!@#$%^&*()_0123456789_" + seq
+                        + ",2测试日志_____abcdefghijklmnopqrstuvwxyz~!@#$%^&*()_0123456789_" + seq
+                        + ",3测试日志_____abcdefghijklmnopqrstuvwxyz~!@#$%^&*()_0123456789_" + seq
+                        + ",4测试日志_____abcdefghijklmnopqrstuvwxyz~!@#$%^&*()_0123456789_" + seq
+                        + ",5测试日志_____abcdefghijklmnopqrstuvwxyz~!@#$%^&*()_0123456789_" + seq);
         return logItem;
     }
 
@@ -281,6 +360,33 @@ public class LogProducerTest {
     public static void assertProducerFinalState(Producer producer) {
         Assert.assertEquals(0, producer.getLogCount());
         Assert.assertEquals(producer.getProducerConfig().getTotalSizeInBytes(), producer.availableMemoryInBytes());
+    }
+
+    static class LogFutureCallback implements FutureCallback<Response> {
+
+        final CountDownLatch latch;
+
+        LogFutureCallback(CountDownLatch latch) {
+            this.latch = latch;
+        }
+
+        @Override
+        public void onSuccess(Response response) {
+            LOGGER.info("Receive response: {}", response);
+            latch.countDown();
+        }
+
+        @Override
+        public void onFailure(Throwable t) {
+            if (t instanceof SendFailureException) {
+                SendFailureException ex = (SendFailureException) t;
+                LOGGER.error("Found error, errorCode: {}, errorMessage: {}, attemptCount: {}", ex.getErrorCode(),
+                        ex.getErrorMessage(), ex.getAttemptCount());
+            } else {
+                LOGGER.error("Found error: {}", t.getMessage(), t);
+            }
+            latch.countDown();
+        }
     }
 }
 

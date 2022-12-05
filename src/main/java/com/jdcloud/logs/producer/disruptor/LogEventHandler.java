@@ -1,17 +1,12 @@
 package com.jdcloud.logs.producer.disruptor;
 
-import com.jdcloud.logs.producer.core.AbstractCloser;
-import com.jdcloud.logs.producer.core.ResourceHolder;
-import com.jdcloud.logs.producer.core.Sender;
+import com.jdcloud.logs.producer.core.*;
 import com.jdcloud.logs.producer.errors.ProducerException;
-import com.jdcloud.logs.producer.util.LogSizeCalculator;
 import com.jdcloud.logs.producer.util.LogThreadFactory;
 import com.lmax.disruptor.EventHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.LinkedList;
-import java.util.List;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -23,26 +18,27 @@ import java.util.concurrent.atomic.AtomicReference;
  * @author liubai
  * @date 2022/7/12
  */
-public class LogEventHandler<E extends LogSizeCalculable, P> extends AbstractCloser implements EventHandler<E> {
+public class LogEventHandler<E extends Event> extends AbstractCloser implements EventHandler<E> {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(LogEventHandler.class);
 
     private static final String BATCH_EXECUTOR_PREFIX = "-disruptor-event-handler-";
-    private List<E> list = new LinkedList<E>();
     private final AtomicReference<Long> clockRef = new AtomicReference<Long>(System.currentTimeMillis());
     private final ScheduledExecutorService executor;
-    private final Sender<E, P> sender;
-    private final P params;
+    private final Sender<E> sender;
+    private final GroupKey groupKey;
     private final int batchSize;
     private final int batchSizeInBytes;
     private final ResourceHolder resourceHolder;
+    private LogBatch logBatch;
 
     public LogEventHandler(String threadNamePrefix, int batchSize, int batchSizeInBytes, final int batchMillis,
-                           Sender<E, P> sender, P params, ResourceHolder resourceHolder) {
+                           Sender<E> sender, GroupKey groupKey, ResourceHolder resourceHolder) {
         this.batchSize = batchSize;
         this.batchSizeInBytes = batchSizeInBytes;
         this.sender = sender;
-        this.params = params;
+        this.groupKey = groupKey;
+        this.logBatch = new LogBatch(groupKey);
         executor = new ScheduledThreadPoolExecutor(1,
                 new LogThreadFactory(threadNamePrefix + BATCH_EXECUTOR_PREFIX));
         this.resourceHolder = resourceHolder;
@@ -60,15 +56,20 @@ public class LogEventHandler<E extends LogSizeCalculable, P> extends AbstractClo
 
     @Override
     public void onEvent(E event, long sequence, boolean endOfBatch) throws Exception {
-        if (!tryAppend(list, event)) {
+        if (!tryAppend(event)) {
             send();
         }
-        list.add(event);
+        addEvent(event);
     }
 
-    private boolean tryAppend(List<E> list, E event) {
-        boolean sizeMeet = list.size() + 1 <= batchSize;
-        boolean bytesMeet = LogSizeCalculator.calculate(list) + event.getSizeInBytes() <= batchSizeInBytes;
+    private void addEvent(E event) {
+        logBatch.addLogItems(event.getLogItems(), event.getLogCount(), event.getSizeInBytes());
+        logBatch.addFuture(event.getFuture());
+    }
+
+    private boolean tryAppend(E event) {
+        boolean sizeMeet = logBatch.getBatchCount() + event.getLogCount() <= batchSize;
+        boolean bytesMeet = logBatch.getBatchSizeInBytes() + event.getSizeInBytes() <= batchSizeInBytes;
         return sizeMeet && bytesMeet;
     }
 
@@ -76,16 +77,16 @@ public class LogEventHandler<E extends LogSizeCalculable, P> extends AbstractClo
         try {
             Long clock = clockRef.get();
             if (clockRef.compareAndSet(clock, System.currentTimeMillis())) {
-                List<E> sendList = list;
-                list = new LinkedList<E>();
-                sender.send(sendList, params);
+                LogBatch sendLogBatch = logBatch;
+                logBatch = new LogBatch(groupKey);
+                sender.send(sendLogBatch);
             }
         } catch (Throwable e) {
             LOGGER.error("Send batch log error: {}", e.getMessage());
             if (LOGGER.isDebugEnabled()) {
                 LOGGER.error(e.getMessage(), e);
             }
-            resourceHolder.release(list.size(), LogSizeCalculator.calculate(list));
+            resourceHolder.release(logBatch.getBatchCount(), logBatch.getBatchSizeInBytes());
         }
     }
 

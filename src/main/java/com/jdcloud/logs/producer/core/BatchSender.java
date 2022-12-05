@@ -2,26 +2,22 @@ package com.jdcloud.logs.producer.core;
 
 import com.google.common.math.LongMath;
 import com.jdcloud.logs.api.LogClient;
-import com.jdcloud.logs.api.common.LogItem;
 import com.jdcloud.logs.api.exception.LogException;
 import com.jdcloud.logs.api.http.error.HttpErrorCode;
 import com.jdcloud.logs.api.request.PutLogsRequest;
+import com.jdcloud.logs.api.response.PutLogsResponse;
 import com.jdcloud.logs.producer.config.ProducerConfig;
 import com.jdcloud.logs.producer.disruptor.LogEvent;
 import com.jdcloud.logs.producer.errors.ProducerException;
-import com.jdcloud.logs.producer.util.LogSizeCalculator;
+import com.jdcloud.logs.producer.res.Attempt;
+import com.jdcloud.logs.producer.res.ResCode;
 import com.jdcloud.logs.producer.util.LogThreadFactory;
 import com.jdcloud.logs.producer.util.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.LinkedList;
-import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
 /**
  * 消费处理
@@ -29,7 +25,7 @@ import java.util.concurrent.TimeUnit;
  * @author liubai
  * @date 2022/6/29
  */
-public class BatchSender extends AbstractCloser implements Sender<LogEvent, LogProcessor.GroupKey> {
+public class BatchSender extends AbstractCloser implements Sender<LogEvent> {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BatchSender.class);
 
@@ -45,8 +41,13 @@ public class BatchSender extends AbstractCloser implements Sender<LogEvent, LogP
 
     private final ResourceHolder resourceHolder;
 
+    private final BlockingQueue<LogBatch> successQueue;
+
+    private final BlockingQueue<LogBatch> failureQueue;
+
     public BatchSender(Map<String, LogClient> logClientPool, ProducerConfig producerConfig, String threadPrefix,
-                       RetryQueue retryQueue, ResourceHolder resourceHolder) {
+                       RetryQueue retryQueue, ResourceHolder resourceHolder,
+                       BlockingQueue<LogBatch> successQueue, BlockingQueue<LogBatch> failureQueue) {
         this.logClientPool = logClientPool;
         this.producerConfig = producerConfig;
         this.sendThreadPool = new ThreadPoolExecutor(producerConfig.getSendThreads(),
@@ -54,20 +55,18 @@ public class BatchSender extends AbstractCloser implements Sender<LogEvent, LogP
                 new LinkedBlockingQueue<Runnable>(), new LogThreadFactory(threadPrefix + IO_THREAD_PREFIX));
         this.retryQueue = retryQueue;
         this.resourceHolder = resourceHolder;
+        this.successQueue = successQueue;
+        this.failureQueue = failureQueue;
     }
 
     @Override
-    public void send(List<LogEvent> logEvents, LogProcessor.GroupKey groupKey) {
-        if (Utils.isEmpty(logEvents)) {
+    public void send(LogBatch logBatch) {
+        if (logBatch == null || logBatch.getBatchCount() == 0) {
             return;
         }
 
-        List<LogItem> logItems = new LinkedList<LogItem>();
-        for (LogEvent logEvent : logEvents) {
-            logItems.add(logEvent.getLogItem());
-        }
-        submit(new SendBatchTask(new LogBatch(logItems, groupKey, LogSizeCalculator.calculate(logEvents)),
-                producerConfig, logClientPool, retryQueue, resourceHolder));
+        submit(new SendBatchTask(logBatch, producerConfig, logClientPool, retryQueue, resourceHolder,
+                successQueue, failureQueue));
     }
 
     public void submit(SendBatchTask task) {
@@ -94,14 +93,19 @@ public class BatchSender extends AbstractCloser implements Sender<LogEvent, LogP
         private final LogBatch logBatch;
         private final RetryQueue retryQueue;
         private final ResourceHolder resourceHolder;
+        private final BlockingQueue<LogBatch> successQueue;
+        private final BlockingQueue<LogBatch> failureQueue;
 
         public SendBatchTask(LogBatch logBatch, ProducerConfig producerConfig, Map<String, LogClient> logClientPool,
-                             RetryQueue retryQueue, ResourceHolder resourceHolder) {
+                             RetryQueue retryQueue, ResourceHolder resourceHolder,
+                             BlockingQueue<LogBatch> successQueue, BlockingQueue<LogBatch> failureQueue) {
             this.producerConfig = producerConfig;
             this.logClientPool = logClientPool;
             this.logBatch = logBatch;
             this.retryQueue = retryQueue;
             this.resourceHolder = resourceHolder;
+            this.successQueue = successQueue;
+            this.failureQueue = failureQueue;
         }
 
         @Override
@@ -114,44 +118,70 @@ public class BatchSender extends AbstractCloser implements Sender<LogEvent, LogP
             }
         }
 
-        private void sendBatch() {
+        private void sendBatch() throws InterruptedException {
             LOGGER.trace("Ready to send batch, logBatch={}", logBatch);
+            long timestampMills = System.currentTimeMillis();
             LogClient logClient = getLogClient(logBatch.getRegionId());
             if (logClient == null) {
-                LOGGER.error("Failed to get client, regionId={}, logTopic={}", logBatch.getRegionId(),
+                LOGGER.error("Log client not found, regionId={}, logTopic={}", logBatch.getRegionId(),
                         logBatch.getLogTopic());
-                release();
+                Attempt attempt = new Attempt(false, "", ResCode.LOG_CLIENT_NOT_FOUNT,
+                        "Log client not found", timestampMills);
+                logBatch.addAttempt(attempt);
+                failureQueue.put(logBatch);
             } else {
+                PutLogsResponse response;
                 try {
                     PutLogsRequest request = buildPutLogsRequest(logBatch);
-                    logClient.putLogs(request);
+                    response = logClient.putLogs(request);
                 } catch (Exception e) {
-                    LOGGER.error("Failed to put logs, regionId={}, logTopic={}, retries={}", logBatch.getRegionId(),
-                            logBatch.getLogTopic(), logBatch.getRetries(), e);
+                    logBatch.addAttempt(createErrorAttempt(e, timestampMills));
+                    LOGGER.error("Failed to put logs, regionId={}, logTopic={}, attemptCount={}", logBatch.getRegionId(),
+                            logBatch.getLogTopic(), logBatch.getAttemptCount(), e);
                     if (notRetry(e)) {
                         LOGGER.debug("Do not retry, because the above exception is not a retry exception, " +
                                 "or the retry queue is closed, or retries is greater than the configured retries, " +
                                 "ready to release, retries={}", logBatch.getRetries());
-                        release();
+                        failureQueue.put(logBatch);
                     } else {
                         long retryBackoffMillis = calculateRetryBackoffMillis();
                         logBatch.setNextRetryMillis(System.currentTimeMillis() + retryBackoffMillis);
-                        logBatch.increaseRetries();
                         LOGGER.debug("Ready to put batch to retry queue, retryBackoffMillis={}, next retries={}",
-                                retryBackoffMillis, logBatch.getRetries());
+                                retryBackoffMillis, logBatch.getAttemptCount());
                         try {
                             retryQueue.put(logBatch);
                         } catch (IllegalStateException e1) {
                             LOGGER.error("Failed to put batch to the retry queue since the retry queue was closed, " +
                                     "ready to release");
-                            release();
+                            failureQueue.put(logBatch);
                         }
                     }
                     return;
                 }
-                release();
+                Attempt attempt = new Attempt(true, response.getRequestId(), ResCode.SUCCESSFUL,
+                        "Send successfully", System.currentTimeMillis());
+                logBatch.addAttempt(attempt);
+                successQueue.put(logBatch);
                 LOGGER.trace("Send batch successfully, batch={}", logBatch);
             }
+        }
+
+        private Attempt createErrorAttempt(Exception e, long timestampMills) {
+            String requestId;
+            String errorCode;
+            if (e instanceof LogException) {
+                LogException logException = (LogException) e;
+                requestId = logException.getRequestId();
+                if (HttpErrorCode.HTTP_RESPONSE_EXCEPTION.equals(logException.getErrorCode())) {
+                    errorCode = String.valueOf(logException.getHttpCode());
+                } else {
+                    errorCode = logException.getErrorCode();
+                }
+            } else {
+                requestId = "";
+                errorCode = ResCode.SEND_ERROR;
+            }
+            return new Attempt(false, requestId, errorCode, e.getMessage(), timestampMills);
         }
 
         private LogClient getLogClient(String regionId) {
