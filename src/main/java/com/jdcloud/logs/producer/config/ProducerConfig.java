@@ -24,22 +24,49 @@ public class ProducerConfig {
 
     public static final long DEFAULT_MAX_RETRY_BACKOFF_MILLIS = 50 * 1000L;
 
+    /**
+     * 日志缓存的内存占用字节数上限
+     */
     private int totalSizeInBytes = DEFAULT_TOTAL_SIZE_IN_BYTES;
 
+    /**
+     * 日志缓存达到上限后，获取可用内存的最大阻塞等待时间
+     */
     private long maxBlockMillis;
 
+    /**
+     * 日志发送线程数
+     */
     private int sendThreads = DEFAULT_SEND_THREADS;
 
+    /**
+     * 每批次发送的日志数
+     */
     private int batchSize = DEFAULT_BATCH_SIZE;
 
+    /**
+     * 每批次发送的日志字节数
+     */
     private int batchSizeInBytes = DEFAULT_BATCH_SIZE_IN_BYTES;
 
+    /**
+     * 批次发送时间间隔毫秒数
+     */
     private int batchMillis = DEFAULT_BATCH_MILLIS;
 
+    /**
+     * 发送失败后重试次数，0为不重试
+     */
     private int retries = DEFAULT_RETRIES;
 
+    /**
+     * 发送失败后首次重试时间毫秒数
+     */
     private long initRetryBackoffMillis = DEFAULT_INIT_RETRY_BACKOFF_MILLIS;
 
+    /**
+     * 发送失败后最大退避时间毫秒数
+     */
     private long maxRetryBackoffMillis = DEFAULT_MAX_RETRY_BACKOFF_MILLIS;
 
     /**
