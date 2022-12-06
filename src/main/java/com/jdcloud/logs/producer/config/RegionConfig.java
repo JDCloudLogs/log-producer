@@ -2,9 +2,24 @@ package com.jdcloud.logs.producer.config;
 
 public class RegionConfig {
 
+    /**
+     * 认证标识
+     */
     private final String accessKeyId;
+
+    /**
+     * 认证秘钥
+     */
     private final String secretAccessKey;
+
+    /**
+     * 地域标识
+     */
     private final String regionId;
+
+    /**
+     * 日志发送地址
+     */
     private final String endpoint;
 
     public RegionConfig(String accessKeyId, String secretAccessKey, String regionId, String endpoint) {
