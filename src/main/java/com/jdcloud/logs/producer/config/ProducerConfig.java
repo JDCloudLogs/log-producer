@@ -24,6 +24,8 @@ public class ProducerConfig {
 
     public static final long DEFAULT_MAX_RETRY_BACKOFF_MILLIS = 50 * 1000L;
 
+    public static final long DEFAULT_MAX_BLOCK_MILLIS = 5000L;
+
     /**
      * 日志缓存的内存占用字节数上限
      */
@@ -32,7 +34,7 @@ public class ProducerConfig {
     /**
      * 日志缓存达到上限后，获取可用内存的最大阻塞等待时间
      */
-    private long maxBlockMillis;
+    private long maxBlockMillis = DEFAULT_MAX_BLOCK_MILLIS;
 
     /**
      * 日志发送线程数
@@ -78,6 +80,19 @@ public class ProducerConfig {
      * 日志收敛时间，调试模式下频繁打印的日志的收敛时间
      */
     private int logConvergenceMillis = 30000;
+
+    /**
+     * 当线程中断时是否忽略中断继续发送日志
+     * true: 忽略中断，使用非阻塞方式尝试发送日志
+     * false: 抛出 InterruptedException，由调用方处理
+     */
+    private boolean ignoreInterruptOnSend = true;
+
+    /**
+     * 线程中断时非阻塞获取资源的最大等待时间（毫秒）
+     * 仅当 ignoreInterruptOnSend 为 true 时生效
+     */
+    private long interruptSendTimeoutMillis = 100L;
 
     public int getTotalSizeInBytes() {
         return totalSizeInBytes;
@@ -189,5 +204,24 @@ public class ProducerConfig {
 
     public void setLogConvergenceMillis(int logConvergenceMillis) {
         this.logConvergenceMillis = logConvergenceMillis;
+    }
+
+    public boolean isIgnoreInterruptOnSend() {
+        return ignoreInterruptOnSend;
+    }
+
+    public void setIgnoreInterruptOnSend(boolean ignoreInterruptOnSend) {
+        this.ignoreInterruptOnSend = ignoreInterruptOnSend;
+    }
+
+    public long getInterruptSendTimeoutMillis() {
+        return interruptSendTimeoutMillis;
+    }
+
+    public void setInterruptSendTimeoutMillis(long interruptSendTimeoutMillis) {
+        if (interruptSendTimeoutMillis < 0) {
+            throw new IllegalArgumentException("interruptSendTimeoutMillis must be greater than or equal to 0, got " + interruptSendTimeoutMillis);
+        }
+        this.interruptSendTimeoutMillis = interruptSendTimeoutMillis;
     }
 }
