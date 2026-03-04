@@ -69,14 +69,53 @@ public class LogProcessor extends AbstractCloser {
 
         LogEvent logEvent = buildEvent(logItems, sizeInBytes);
 
-        resourceHolder.acquire(logItems.size(), sizeInBytes, producerConfig.getMaxBlockMillis());
+        // 尝试获取资源许可
+        boolean resourceAcquired = false;
+        boolean wasInterrupted = false;
+
+        try {
+            resourceHolder.acquire(logItems.size(), sizeInBytes, producerConfig.getMaxBlockMillis());
+            resourceAcquired = true;
+        } catch (InterruptedException e) {
+            wasInterrupted = true;
+            LOGGER.warn("Log processing interrupted during resource acquisition, logCount={}, sizeInBytes={}",
+                    logItems.size(), sizeInBytes);
+
+            // 检查是否配置了忽略中断继续发送
+            if (producerConfig.isIgnoreInterruptOnSend()) {
+                LOGGER.info("Attempting to send logs despite thread interruption (ignoreInterruptOnSend=true), " +
+                        "logCount={}, sizeInBytes={}", logItems.size(), sizeInBytes);
+
+                // 使用非阻塞方式尝试获取资源
+                resourceAcquired = resourceHolder.tryAcquire(
+                        logItems.size(),
+                        sizeInBytes,
+                        producerConfig.getInterruptSendTimeoutMillis()
+                );
+
+                if (!resourceAcquired) {
+                    // 非阻塞获取失败，但日志很重要，尝试直接发布到 Disruptor（不占用资源配额）
+                    // 这种情况下可能会导致内存超限，但确保日志不丢失
+                    LOGGER.warn("Failed to acquire resource in non-blocking mode, publishing directly to ensure " +
+                            "log delivery, logCount={}, sizeInBytes={}", logItems.size(), sizeInBytes);
+                }
+            } else {
+                // 不忽略中断，恢复中断状态并抛出异常，此处日志保留策略为丢弃，需要需要根据发送方配置策略进行调整
+                LOGGER.error("Log processing interrupted during resource acquisition, logCount={}, sizeInBytes={}",
+                        logItems.size(), sizeInBytes);
+                Thread.currentThread().interrupt();
+                throw new ProducerException("Log processing was interrupted during resource acquisition", e);
+            }
+        }
 
         try {
             GroupKey groupKey = new GroupKey(regionId, logTopic, source, fileName);
             DisruptorHandler<LogEvent> disruptor = getOrCreateDisruptorHandler(groupKey);
             disruptor.publish(logEvent);
         } catch (Throwable e) {
-            resourceHolder.release(logItems.size(), sizeInBytes);
+            if (resourceAcquired) {
+                resourceHolder.release(logItems.size(), sizeInBytes);
+            }
             throw new ProducerException(e);
         }
         return logEvent.getFuture();
