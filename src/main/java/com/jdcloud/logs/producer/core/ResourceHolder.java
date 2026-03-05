@@ -20,6 +20,17 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class ResourceHolder {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ResourceHolder.class);
+    
+    /**
+     * 用于检测日志递归调用的 ThreadLocal
+     * 防止在日志输出过程中再次触发日志输出，造成无限循环
+     */
+    private static final ThreadLocal<Boolean> IN_LOG_OUTPUT = new ThreadLocal<Boolean>() {
+        @Override
+        protected Boolean initialValue() {
+            return Boolean.FALSE;
+        }
+    };
 
     private final Semaphore memoryController;
 
@@ -47,7 +58,7 @@ public class ResourceHolder {
             if (maxBlockMillis > 0) {
                 boolean acquired = memoryController.tryAcquire(sizeInBytes, maxBlockMillis, TimeUnit.MILLISECONDS);
                 if (!acquired) {
-                    LOGGER.warn("Failed to acquire memory within the configured max blocking time {} ms, "
+                    safeLogWarn("Failed to acquire memory within the configured max blocking time {} ms, "
                                     + "requiredSizeInBytes={}, availableSizeInBytes={}",
                             maxBlockMillis, sizeInBytes, memoryController.availablePermits());
                     throw new TimeoutException("failed to acquire memory within the configured max blocking time "
@@ -57,7 +68,7 @@ public class ResourceHolder {
                 memoryController.acquire(sizeInBytes);
             }
         } catch (InterruptedException e) {
-            LOGGER.warn("Thread interrupted while acquiring memory resource, requiredSizeInBytes={}", sizeInBytes);
+            safeLogWarn("Thread interrupted while acquiring memory resource, requiredSizeInBytes={}", sizeInBytes);
             Thread.currentThread().interrupt(); // 重新设置中断状态
             throw e;
         }
@@ -88,7 +99,7 @@ public class ResourceHolder {
             }
         } catch (InterruptedException e) {
             // 中断时再次尝试非阻塞获取
-            LOGGER.warn("Thread interrupted during tryAcquire, attempting non-blocking acquire, requiredSizeInBytes={}",
+            safeLogWarn("Thread interrupted during tryAcquire, attempting non-blocking acquire, requiredSizeInBytes={}",
                     sizeInBytes);
             Thread.currentThread().interrupt();
             acquired = memoryController.tryAcquire(sizeInBytes);
@@ -113,5 +124,36 @@ public class ResourceHolder {
 
     public AtomicInteger getLogCount() {
         return logCount;
+    }
+    
+    /**
+     * 安全的日志输出方法，防止递归调用
+     * 使用 ThreadLocal 检测是否已经在日志输出过程中
+     * 如果是，则直接输出到 System.err，避免触发 appender 导致递归
+     */
+    private void safeLogWarn(String format, Object... args) {
+        // 检查是否已经在日志输出过程中
+        if (IN_LOG_OUTPUT.get()) {
+            // 已经在日志输出过程中，直接输出到 System.err 避免递归
+            String message = format;
+            if (args != null && args.length > 0) {
+                try {
+                    message = String.format(format.replace("{}", "%s"), args);
+                } catch (Exception e) {
+                    // 格式化失败，使用原始消息
+                }
+            }
+            System.err.println("[WARN] " + ResourceHolder.class.getSimpleName() + " - " + message);
+            return;
+        }
+        
+        try {
+            // 设置标志，表示正在输出日志
+            IN_LOG_OUTPUT.set(Boolean.TRUE);
+            LOGGER.warn(format, args);
+        } finally {
+            // 清除标志
+            IN_LOG_OUTPUT.remove();
+        }
     }
 }

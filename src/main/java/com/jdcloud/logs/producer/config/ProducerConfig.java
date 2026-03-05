@@ -24,7 +24,7 @@ public class ProducerConfig {
 
     public static final long DEFAULT_MAX_RETRY_BACKOFF_MILLIS = 50 * 1000L;
 
-    public static final long DEFAULT_MAX_BLOCK_MILLIS = 5000L;
+    public static final long DEFAULT_MAX_BLOCK_MILLIS = 0L;
 
     /**
      * 日志缓存的内存占用字节数上限
