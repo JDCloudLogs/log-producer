@@ -6,10 +6,11 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.DelayQueue;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 失败重试
+ * 失败重试（带容量限制，避免堆积导致OOM）
  *
  * @author liubai
  * @date 2022/6/30
@@ -22,10 +23,13 @@ public class RetryQueue extends AbstractCloser {
 
     private final AtomicInteger putsInProgress;
 
+    private final Semaphore capacityController;
+
     private volatile boolean closed;
 
-    public RetryQueue() {
+    public RetryQueue(int capacity) {
         this.putsInProgress = new AtomicInteger(0);
+        this.capacityController = new Semaphore(capacity);
         this.closed = false;
     }
 
@@ -34,6 +38,10 @@ public class RetryQueue extends AbstractCloser {
         try {
             if (closed) {
                 throw new IllegalStateException("Cannot put after the retry queue was closed");
+            }
+            // 容量限制，防止重试队列无限增长
+            if (!capacityController.tryAcquire()) {
+                throw new IllegalStateException("Retry queue capacity exceeded");
             }
             retryBatches.put(batch);
         } finally {
@@ -48,6 +56,9 @@ public class RetryQueue extends AbstractCloser {
         } catch (InterruptedException e) {
             LOGGER.info("Interrupted when take batch from the retry batches");
         }
+        if (batch != null) {
+            capacityController.release();
+        }
         return batch;
     }
 
@@ -61,7 +72,12 @@ public class RetryQueue extends AbstractCloser {
             }
         }
         List<LogBatch> remainingBatches = new ArrayList<LogBatch>(retryBatches);
+        int size = remainingBatches.size();
         retryBatches.clear();
+        // 清空时释放占用的容量
+        if (size > 0) {
+            capacityController.release(size);
+        }
         return remainingBatches;
     }
 

@@ -16,5 +16,8 @@ public class LogEventTranslator implements EventTranslatorOneArg<LogEvent, LogEv
         logEvent.setSizeInBytes(logItem.getSizeInBytes());
         logEvent.setLogCount(logItem.getLogCount());
         logEvent.setFuture(logItem.getFuture());
+        // 传递已获取资源配额，防止释放配额时发生放大
+        logEvent.setAcquiredSizeInBytes(logItem.getAcquiredSizeInBytes());
+        logEvent.setAcquiredCount(logItem.getAcquiredCount());
     }
 }

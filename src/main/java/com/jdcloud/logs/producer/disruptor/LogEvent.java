@@ -21,6 +21,9 @@ public class LogEvent implements Event {
     private int sizeInBytes;
     private int logCount;
     private SettableFuture<Response> future;
+    // 记录已成功获取的资源配额（仅当 acquire/tryAcquire 成功时设置）
+    private int acquiredSizeInBytes;
+    private int acquiredCount;
 
     private static class Factory implements EventFactory<LogEvent> {
         @Override
@@ -63,5 +66,21 @@ public class LogEvent implements Event {
 
     public void setFuture(SettableFuture<Response> future) {
         this.future = future;
+    }
+
+    public int getAcquiredSizeInBytes() {
+        return acquiredSizeInBytes;
+    }
+
+    public void setAcquiredSizeInBytes(int acquiredSizeInBytes) {
+        this.acquiredSizeInBytes = acquiredSizeInBytes;
+    }
+
+    public int getAcquiredCount() {
+        return acquiredCount;
+    }
+
+    public void setAcquiredCount(int acquiredCount) {
+        this.acquiredCount = acquiredCount;
     }
 }

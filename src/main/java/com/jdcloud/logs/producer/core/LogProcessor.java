@@ -117,7 +117,20 @@ public class LogProcessor extends AbstractCloser {
             }
         }
 
+        // 如果在忽略中断的模式下最终仍未获取到资源，为保障稳定性不再发布到Disruptor，直接失败返回，避免下游无界积压导致OOM
+        if (!resourceAcquired) {
+            logEvent.getFuture().setException(new ProducerException("Failed to acquire resource after interrupt; dropped to ensure stability"));
+            return logEvent.getFuture();
+        }
         try {
+            // 设置事件的已占用资源配额，防止未获取资源时在响应阶段错误释放导致配额放大
+            if (resourceAcquired) {
+                logEvent.setAcquiredCount(logItems.size());
+                logEvent.setAcquiredSizeInBytes(sizeInBytes);
+            } else {
+                logEvent.setAcquiredCount(0);
+                logEvent.setAcquiredSizeInBytes(0);
+            }
             GroupKey groupKey = new GroupKey(regionId, logTopic, source, fileName);
             DisruptorHandler<LogEvent> disruptor = getOrCreateDisruptorHandler(groupKey);
             disruptor.publish(logEvent);
