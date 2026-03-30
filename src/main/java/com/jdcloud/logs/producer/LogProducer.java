@@ -71,13 +71,22 @@ public class LogProducer implements Producer {
         this.producerConfig = producerConfig;
         LogUtils.LOG_CONVERGENCE = producerConfig.isLogConvergence();
         LogUtils.CONVERGENCE_MILLIS = producerConfig.getLogConvergenceMillis();
-        this.resourceHolder = new ResourceHolder(producerConfig.getTotalSizeInBytes());
+        int totalSize = producerConfig.getTotalSizeInBytes();
+        int adjustedTotalSize = totalSize;
+        if (producerConfig.isIgnoreInterruptOnSend()) {
+            long expanded = Math.round(totalSize * 1.05d);
+            adjustedTotalSize = expanded > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) expanded;
+            if (adjustedTotalSize != totalSize) {
+                LOGGER.info("ignoreInterruptOnSend=true, expand ResourceHolder capacity by 5%: {} -> {}", totalSize, adjustedTotalSize);
+            }
+        }
+        this.resourceHolder = new ResourceHolder(adjustedTotalSize);
         this.httpExecutor = new ThreadPoolExecutor(producerConfig.getSendThreads(),
                 producerConfig.getSendThreads(), 0, TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<Runnable>(), new LogThreadFactory(producerName + HTTP_EXECUTOR_SUFFIX));
-        this.retryQueue = new RetryQueue();
-        BlockingQueue<LogBatch> successQueue = new LinkedBlockingQueue<LogBatch>();
-        BlockingQueue<LogBatch> failureQueue = new LinkedBlockingQueue<LogBatch>();
+        this.retryQueue = new RetryQueue(producerConfig.getRetryQueueCapacity());
+        BlockingQueue<LogBatch> successQueue = new LinkedBlockingQueue<LogBatch>(producerConfig.getResponseQueueCapacity());
+        BlockingQueue<LogBatch> failureQueue = new LinkedBlockingQueue<LogBatch>(producerConfig.getResponseQueueCapacity());
         this.batchSender = new BatchSender(this.logClientPool, producerConfig, producerName, this.retryQueue,
                 resourceHolder, successQueue, failureQueue);
         this.logProcessor = new LogProcessor(this.batchSender, producerConfig, resourceHolder, producerName);

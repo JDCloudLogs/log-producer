@@ -96,7 +96,8 @@ public class ResponseHandler extends AbstractCloser {
         } catch (Throwable t) {
             LOGGER.error("Filed to handler " + flag + " response");
         } finally {
-            release(logBatch.getBatchCount(), logBatch.getBatchSizeInBytes());
+            // 仅释放已获资源配额，避免在未获取资源的情况下释放导致配额放大
+            release(logBatch.getAcquiredCount(), logBatch.getAcquiredSizeInBytes());
         }
     }
 

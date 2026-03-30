@@ -52,7 +52,9 @@ public class BatchSender extends AbstractCloser implements Sender<LogEvent> {
         this.producerConfig = producerConfig;
         this.sendThreadPool = new ThreadPoolExecutor(producerConfig.getSendThreads(),
                 producerConfig.getSendThreads(), 0, TimeUnit.MILLISECONDS,
-                new LinkedBlockingQueue<Runnable>(), new LogThreadFactory(threadPrefix + IO_THREAD_PREFIX));
+                new LinkedBlockingQueue<Runnable>(producerConfig.getSendQueueCapacity()),
+                new LogThreadFactory(threadPrefix + IO_THREAD_PREFIX),
+                new ThreadPoolExecutor.CallerRunsPolicy());
         this.retryQueue = retryQueue;
         this.resourceHolder = resourceHolder;
         this.successQueue = successQueue;
@@ -70,7 +72,22 @@ public class BatchSender extends AbstractCloser implements Sender<LogEvent> {
     }
 
     public void submit(SendBatchTask task) {
-        sendThreadPool.submit(task);
+        try {
+            sendThreadPool.submit(task);
+        } catch (RejectedExecutionException e) {
+            LOGGER.warn("Send queue capacity exceeded, dropping batch, regionId={}, logTopic={}",
+                    task.getLogBatch().getRegionId(), task.getLogBatch().getLogTopic());
+            Attempt attempt = new Attempt(false, "", ResCode.SEND_ERROR,
+                    "Send queue capacity exceeded", System.currentTimeMillis());
+            LogBatch lb = task.getLogBatch();
+            lb.addAttempt(attempt);
+            try {
+                failureQueue.put(lb);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                LOGGER.error("Interrupted while enqueueing failure batch after rejection");
+            }
+        }
     }
 
     @Override
@@ -106,6 +123,10 @@ public class BatchSender extends AbstractCloser implements Sender<LogEvent> {
             this.resourceHolder = resourceHolder;
             this.successQueue = successQueue;
             this.failureQueue = failureQueue;
+        }
+
+        public LogBatch getLogBatch() {
+            return this.logBatch;
         }
 
         @Override

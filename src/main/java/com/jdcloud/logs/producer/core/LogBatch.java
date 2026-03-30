@@ -24,6 +24,9 @@ public class LogBatch implements Delayed {
     private long nextRetryMillis;
     private int batchCount;
     private int batchSizeInBytes;
+    // 已成功获取的资源配额（累计值），用于防止未获取配额的释放导致配额放大
+    private int acquiredCount;
+    private int acquiredSizeInBytes;
     private final List<SettableFuture<Response>> futures;
     private final List<Attempt> attempts;
     private int attemptCount;
@@ -119,6 +122,19 @@ public class LogBatch implements Delayed {
 
     public int getAttemptCount() {
         return attemptCount;
+    }
+
+    public int getAcquiredCount() {
+        return acquiredCount;
+    }
+
+    public int getAcquiredSizeInBytes() {
+        return acquiredSizeInBytes;
+    }
+
+    public void addAcquired(int count, int sizeInBytes) {
+        this.acquiredCount += count;
+        this.acquiredSizeInBytes += sizeInBytes;
     }
 
     @Override

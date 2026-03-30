@@ -18,7 +18,7 @@ public class ProducerConfig {
 
     public static final int MIN_BATCH_MILLIS = 100;
 
-    public static final int DEFAULT_RETRIES = 10;
+    public static final int DEFAULT_RETRIES = 3;
 
     public static final long DEFAULT_INIT_RETRY_BACKOFF_MILLIS = 100L;
 
@@ -93,6 +93,18 @@ public class ProducerConfig {
      * 仅当 ignoreInterruptOnSend 为 true 时生效
      */
     private long interruptSendTimeoutMillis = 100L;
+    
+    // 发送线程池队列容量（用于限制任务堆积，避免OOM）
+    public static final int DEFAULT_SEND_QUEUE_CAPACITY = 8192;
+    private int sendQueueCapacity = DEFAULT_SEND_QUEUE_CAPACITY;
+    
+    // 重试队列容量（用于限制重试堆积，避免OOM）
+    public static final int DEFAULT_RETRY_QUEUE_CAPACITY = 8192;
+    private int retryQueueCapacity = DEFAULT_RETRY_QUEUE_CAPACITY;
+    
+    // 成功/失败响应队列容量（用于限制响应堆积，避免OOM）
+    public static final int DEFAULT_RESPONSE_QUEUE_CAPACITY = 8192;
+    private int responseQueueCapacity = DEFAULT_RESPONSE_QUEUE_CAPACITY;
 
     public int getTotalSizeInBytes() {
         return totalSizeInBytes;
@@ -223,5 +235,38 @@ public class ProducerConfig {
             throw new IllegalArgumentException("interruptSendTimeoutMillis must be greater than or equal to 0, got " + interruptSendTimeoutMillis);
         }
         this.interruptSendTimeoutMillis = interruptSendTimeoutMillis;
+    }
+
+    public int getSendQueueCapacity() {
+        return sendQueueCapacity;
+    }
+
+    public void setSendQueueCapacity(int sendQueueCapacity) {
+        if (sendQueueCapacity <= 0) {
+            throw new IllegalArgumentException("sendQueueCapacity must be greater than 0, got " + sendQueueCapacity);
+        }
+        this.sendQueueCapacity = sendQueueCapacity;
+    }
+
+    public int getRetryQueueCapacity() {
+        return retryQueueCapacity;
+    }
+
+    public void setRetryQueueCapacity(int retryQueueCapacity) {
+        if (retryQueueCapacity <= 0) {
+            throw new IllegalArgumentException("retryQueueCapacity must be greater than 0, got " + retryQueueCapacity);
+        }
+        this.retryQueueCapacity = retryQueueCapacity;
+    }
+
+    public int getResponseQueueCapacity() {
+        return responseQueueCapacity;
+    }
+
+    public void setResponseQueueCapacity(int responseQueueCapacity) {
+        if (responseQueueCapacity <= 0) {
+            throw new IllegalArgumentException("responseQueueCapacity must be greater than 0, got " + responseQueueCapacity);
+        }
+        this.responseQueueCapacity = responseQueueCapacity;
     }
 }

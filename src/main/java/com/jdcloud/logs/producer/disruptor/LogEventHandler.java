@@ -65,6 +65,8 @@ public class LogEventHandler<E extends Event> extends AbstractCloser implements 
     private void addEvent(E event) {
         logBatch.addLogItems(event.getLogItems(), event.getLogCount(), event.getSizeInBytes());
         logBatch.addFuture(event.getFuture());
+        // 累计已获取的资源配额，避免未获取资源时释放导致配额放大
+        logBatch.addAcquired(event.getAcquiredCount(), event.getAcquiredSizeInBytes());
     }
 
     private boolean tryAppend(E event) {
@@ -74,19 +76,25 @@ public class LogEventHandler<E extends Event> extends AbstractCloser implements 
     }
 
     private void send() {
+        LogBatch toSend = null;
         try {
             Long clock = clockRef.get();
             if (clockRef.compareAndSet(clock, System.currentTimeMillis())) {
-                LogBatch sendLogBatch = logBatch;
+                toSend = logBatch;
                 logBatch = new LogBatch(groupKey);
-                sender.send(sendLogBatch);
+                sender.send(toSend);
             }
         } catch (Throwable e) {
             LOGGER.error("Send batch log error: {}", e.getMessage());
             if (LOGGER.isDebugEnabled()) {
                 LOGGER.error(e.getMessage(), e);
             }
-            resourceHolder.release(logBatch.getBatchCount(), logBatch.getBatchSizeInBytes());
+            // 仅释放已获资源配额，避免未获取资源情况下释放导致配额放大
+            if (toSend != null) {
+                resourceHolder.release(toSend.getAcquiredCount(), toSend.getAcquiredSizeInBytes());
+            } else {
+                resourceHolder.release(logBatch.getAcquiredCount(), logBatch.getAcquiredSizeInBytes());
+            }
         }
     }
 

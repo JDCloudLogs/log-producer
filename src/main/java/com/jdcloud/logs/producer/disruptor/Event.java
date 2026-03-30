@@ -21,4 +21,8 @@ public interface Event {
     int getLogCount();
 
     SettableFuture<Response> getFuture();
+    
+    // 已获取的资源配额（仅当 acquire/tryAcquire 成功时才有值）
+    int getAcquiredSizeInBytes();
+    int getAcquiredCount();
 }
